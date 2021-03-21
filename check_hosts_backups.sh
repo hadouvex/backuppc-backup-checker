@@ -13,6 +13,8 @@ TG_BOT_API_BASE_LINK='https://api.telegram.org/bot'
 #HOSTS_SRC_FILE <- .env
 #HOSTS_SRC_HOST <- .env
 
+#BACKUPPC_HOST_HOSTNAME <- .env
+
 #BACKUPS_SRC_HOST <- .env
 #BACKUPS_SRC_DIR <- .env
 
@@ -36,6 +38,8 @@ hosts_without_required_backups=()
 sed_regex_string=""
 
 declare -A backups_per_host_required
+declare -A latest_backup_date_for_host_required
+declare -A oldest_backup_date_for_host_required
 
 hosts_exceptions=()
 
@@ -71,9 +75,9 @@ get_required_hosts_from_trimmed_hosts_file () {
 
     cp $HOSTS_FILE_TRIMMED $HOSTS_FILE_BACKUPS_REQUIRED
 
-    if [[ -e $SED_REGEX_FILE && -s $SED_REGEX_FILE ]]; then
+    if [[ -s $SED_REGEX_FILE ]]; then
         generate_sed_string_from_file
-    elif [[ -e $SED_REGEX_FILE && ! -s $SED_REGEX_FILE ]]; then
+    elif [[ ! -s $SED_REGEX_FILE ]]; then
         echo "Sed regex file was found but it is empty! No filter will be applied..."
     else
         echo 'No file with sed regex was found! No filter will be applied...'
@@ -122,21 +126,73 @@ get_backups_per_host_required () {
     counter=0
     hosts_count=${#hosts_with_required_backups[@]}
     echo -e "\nCounting backups for hosts. This may take some time if executing remotely...\n"
-    if [[ $(hostname) =~ "backup-5" ]]; then
+    if [[ $(hostname) =~ "${BACKUPS_SRC_HOST}" ]]; then
         for host in ${hosts_with_required_backups[@]}; do
-            backups_per_host_required[$host]=$(sudo ls $BACKUPS_SRC_DIR/$host | grep -E '^[0-9]' | wc -l)
+            backups_per_host_required[$host]=$(sudo ls $BACKUPS_SRC_DIR/$host | grep -E '^[0-9].*[0-9]$' | wc -l)
             (( counter++ ))
             echo "$counter/$hosts_count"
         done
     else
         for host in ${hosts_with_required_backups[@]}; do
-            backups_per_host_required[$host]=$(ssh $SSH_USER@$BACKUPS_SRC_HOST sudo ls $BACKUPS_SRC_DIR/$host | grep -E '^[0-9]' | wc -l)
+            backups_per_host_required[$host]=$(ssh $SSH_USER@$BACKUPS_SRC_HOST sudo ls $BACKUPS_SRC_DIR/$host | grep -E '^[0-9].*[0-9]$' | wc -l)
             (( counter++ ))
             echo "$counter/$hosts_count"
         done
     fi
 
     echo -e "\n...Done."
+}
+
+get_latest_and_oldest_backup_date_for_hosts_required_from_remote_host () {
+    for host in ${hosts_with_required_backups[@]}; do
+        latest_date=''
+        oldest_date=''
+        
+        if [[ $(hostname) =~ "${BACKUPS_SRC_HOST}" ]]; then
+            tmp=$(sudo ls -lah $BACKUPS_SRC_DIR/$host)
+        else
+            tmp=$(ssh $SSH_USER@$BACKUPS_SRC_HOST sudo ls -lah $BACKUPS_SRC_DIR/$host)
+        fi
+
+        tmp=$(cat <<< $tmp | awk '{print $6, $7, $8, $9;}' | grep -E "[0-9]+$" | sed '/LOG/d ; /Info/d')
+
+        while read line; do
+            month=$(echo $line | awk '{print $1}')
+            day=$(echo $line | awk '{print $2}')
+            time_year=$(echo $line | awk '{print $3}')
+            if [[ $time_year =~ ':' ]]; then
+                if [[ $(date +%m%d) < $(date -d "${month}${day}" +%m%d) ]]; then
+                    year=$(($(date +%Y) - 1))
+                else
+                    year=$(date +%Y)
+                fi
+            else
+                year=$time_year
+            fi
+
+            date_var=$(date -d "${month}-${day}-${year}" +"%Y-%m-%d")
+
+            if [[ -z $latest_date ]]; then
+                latest_date=$date_var
+            fi
+
+            if [[ -z $oldest_date ]]; then
+                oldest_date=$date_var
+            fi
+
+            if [[ $date_var > $latest_date ]]; then
+                latest_date=$date_var
+            fi
+
+            if [[ $date_var < $oldest_date ]]; then
+                oldest_date=$date_var
+            fi
+
+        done <<< $(cat <<< $tmp)
+
+        latest_backup_date_for_host_required[$host]=$latest_date
+        oldest_backup_date_for_host_required[$host]=$oldest_date
+    done
 }
 
 print_summary () {
@@ -186,14 +242,14 @@ run_tg_mode () {
     nl='%0A'
     sp='%20'
 
-    if [[ $(hostname) =~ "backup-5" ]]; then
+    if [[ $(hostname) =~ "${BACKUPS_SRC_HOST}" ]]; then
         get_hosts_from_local_host_and_write_to_file
     else
         get_hosts_from_remote_host_and_write_to_file
     fi
     trim_hosts_file
     get_required_hosts_from_trimmed_hosts_file
-    if [[ $(hostname) =~ "backup-5" ]]; then
+    if [[ $(hostname) =~ "${BACKUPS_SRC_HOST}" ]]; then
         get_existent_backups_from_localhost
     else
         get_existent_backups_from_remote
@@ -242,14 +298,14 @@ run_tg_mode () {
 }
 
 run_normal_mode () {
-    if [[ $(hostname) =~ "backup-5" ]]; then
+    if [[ $(hostname) =~ "${BACKUPS_SRC_HOST}" ]]; then
         get_hosts_from_local_host_and_write_to_file
     else
         get_hosts_from_remote_host_and_write_to_file
     fi
     trim_hosts_file
     get_required_hosts_from_trimmed_hosts_file
-    if [[ $(hostname) =~ "backup-5" ]]; then
+    if [[ $(hostname) =~ "${BACKUPS_SRC_HOST}" ]]; then
         get_existent_backups_from_localhost
     else
         get_existent_backups_from_remote
@@ -257,8 +313,13 @@ run_normal_mode () {
     match_required_backups_with_existent
     count_backups_total
     match_existent_backups_with_required
-    if [[ "$@" =~ 'c' ]]; then get_backups_per_host_required; fi
+    if [[ "$@" =~ 'c' ]]; then
+        get_backups_per_host_required
+    fi
     print_summary $@
+    get_latest_and_oldest_backup_date_for_hosts_required_from_remote_host
+
+    
 }
 
 main () {
