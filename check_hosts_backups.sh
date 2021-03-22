@@ -202,19 +202,27 @@ print_summary () {
     red=$(tput setaf 1)
     default=$(tput sgr0)
     s_underline=$(tput smul)
-    r_underline=$(tput rmul)
+    r_underline=$(tput rmul);
 
     echo -e "${bold}\n----------------------------------------SUMMARY:\n${default}"
     echo -e "${bold}$hosts_with_backups_total_count${default} hosts with backups were found in ${bold}total${default}.\n"
     echo -e "${green}${bold}${#hosts_with_required_backups[@]}${default}${green} hosts have ${bold}required${default}${green} backups.\n"
     if [[ "$@" =~ 'h' ]]; then
         for host in ${hosts_with_required_backups[@]}; do
-            if [[ "$@" =~ 'c' ]]; then
+            if [[ "$@" =~ 'c' && "$@" =~ 'd' ]]; then
+                if [[ ${backups_per_host_required[$host]} != 0 ]]; then
+                    echo "$host : ${bold}${backups_per_host_required[$host]}${default}${green} [${latest_backup_date_for_host_required[$host]}/${oldest_backup_date_for_host_required[$host]}]"
+                else
+                    echo "$host : ${red}${bold}there is a directory for this host, but no backups!${default}${green}"
+                fi
+            elif [[ "$@" =~ 'c' ]]; then
                 if [[ ${backups_per_host_required[$host]} != 0 ]]; then
                     echo "$host : ${backups_per_host_required[$host]}"
                 else
                     echo "$host : ${red}${bold}there is a directory for this host, but no backups!${default}${green}"
                 fi
+            elif [[ "$@" =~ 'd' ]]; then
+                echo "$host : latest: ${latest_backup_date_for_host_required[$host]} oldest: ${oldest_backup_date_for_host_required[$host]}"
             else
                 echo $host
             fi
@@ -316,8 +324,10 @@ run_normal_mode () {
     if [[ "$@" =~ 'c' ]]; then
         get_backups_per_host_required
     fi
+    if [[ "$@" =~ 'd' ]]; then
+        get_latest_and_oldest_backup_date_for_hosts_required_from_remote_host
+    fi
     print_summary $@
-    get_latest_and_oldest_backup_date_for_hosts_required_from_remote_host
 
     
 }
@@ -331,7 +341,3 @@ main () {
 }
 
 main $@
-
-# * Добавить подсчет бекапов для телеги
-# * Добавить вывод даты для телеги и cli
-# * Добавить сравнение состояния за разные даты
