@@ -77,10 +77,8 @@ get_required_hosts_from_trimmed_hosts_file () {
 
     if [[ -s $SED_REGEX_FILE ]]; then
         generate_sed_string_from_file
-    elif [[ ! -s $SED_REGEX_FILE ]]; then
-        echo "Sed regex file was found but it is empty! No filter will be applied..."
     else
-        echo 'No file with sed regex was found! No filter will be applied...'
+        echo "Sed regex file doesn't exist or it is empty! No filter will be applied..."
     fi
 
     while read line; do
